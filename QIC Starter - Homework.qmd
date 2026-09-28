@@ -45,6 +45,18 @@ which have two additional problems A and C didn't.
 
 # TODO: reuse your mixed-date parser from class on encounter_date and
 # result_date.
+
+parse_mixed_date <- function(x) {
+  d_iso <- suppressWarnings(as.Date(x, format = "%Y-%m-%d"))
+  d_us  <- suppressWarnings(as.Date(x, format = "%m/%d/%Y"))
+  coalesce(d_iso, d_us)
+}
+
+encounters <- encounters %>% mutate(encounter_date = parse_mixed_date(encounter_date))
+labs <- labs %>% mutate(result_date = parse_mixed_date(result_date))
+
+sum(is.na(encounters$encounter_date))
+sum(is.na(labs$result_date))
 ```
 
 ### Task 1: standardize the join key, then join
@@ -61,6 +73,9 @@ which have two additional problems A and C didn't.
 # TODO: create a standardized version of provider_id on BOTH tables
 # (case + whitespace), then join on the standardized version. Confirm
 # zero unmatched rows afterward.
+encounters <- encounters %>% left_join(lookup, by = "provider_id")
+
+sum(is.na(encounters$clinic_id))
 ```
 
 ### Build the denominator
