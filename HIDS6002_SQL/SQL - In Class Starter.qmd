@@ -40,6 +40,11 @@ the magnifying glass, using `DESCRIBE immunizations;` and a quick `SELECT * FROM
 
 # TODO: count how many records exist per immunization DESCRIPTION,
 # most common first. Same GROUP BY + COUNT(*) pattern you already know.
+
+Select *
+From immunizations
+GROUP BY description
+Count *
 ```
 
 ## Step 1: patients who've had a flu shot

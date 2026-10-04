@@ -73,7 +73,29 @@ sum(is.na(labs$result_date))
 # TODO: create a standardized version of provider_id on BOTH tables
 # (case + whitespace), then join on the standardized version. Confirm
 # zero unmatched rows afterward.
-encounters <- encounters %>% left_join(lookup, by = "provider_id")
+
+encounters <- read_csv("data/encounters.csv")
+
+encounters <- encounters %>%
+  left_join(lookup, by = "provider_id")
+
+encounters %>%
+  filter(is.na(clinic_id)) %>%
+  select(provider_id) %>%
+  head(10)
+
+encounters <- encounters %>%
+  mutate(provider_id_clean = toupper(trimws(provider_id)))
+
+lookup <- lookup %>%
+  mutate(provider_id_clean = toupper(trimws(provider_id)))
+
+encounters <- encounters %>%
+  select(-clinic_id) %>%
+  left_join(
+    lookup %>% select(provider_id_clean, clinic_id),
+    by = "provider_id_clean"
+  )
 
 sum(is.na(encounters$clinic_id))
 ```
@@ -88,6 +110,20 @@ sum(is.na(encounters$clinic_id))
 # set dates to month level
 # reduce to unique patients per clinic per month rows
 # count the number for rows
+
+encounters <- encounters %>% 
+  mutate(encounter_date = parse_mixed_date(encounter_date))
+
+labs <- labs %>% 
+  mutate(result_date = parse_mixed_date(result_date))
+
+denom <- encounters %>%
+  filter(clinic_id %in% c("Clinic B", "Clinic D")) %>%
+  mutate(month = floor_date(encounter_date, "month")) %>%
+  distinct(clinic_id, month, patient_id) %>%
+  count(clinic_id, month, name = "denominator")
+
+head(denom)
 ```
 
 ### Clean the labs and handle Task 2: implausible values
@@ -99,16 +135,29 @@ sum(is.na(encounters$clinic_id))
 # drop non-numeric/missing entries, remove exact duplicates -- same logic as
 # class.
 
+hba1c_clean <- labs %>%
+  filter(test_name == "HbA1c") %>%
+  distinct(patient_id, result_date, test_name, result_value) %>%
+  mutate(result_value = suppressWarnings(as.numeric(result_value))) %>%
+  filter(!is.na(result_value)) %>%
+  mutate(month = floor_date(result_date, "month"))
 ```
 
 ```{r}
-#| label: clean-labs-filter
+#| label: plausible-range
 
 
 # TODO (Task 2): before computing the numerator, add a plausible-range
 # filter on the numeric value (a reasonable range for this exercise is
 # roughly 4-15). Report how many rows this excludes. Also convert dates to month. 
+sum(hba1c_clean$result_value < 4 | hba1c_clean$result_value > 15)
 
+# This excludes 18 rows.
+
+hba1c_clean <- hba1c_clean %>%
+  filter(result_value >= 4, result_value <= 15)
+
+sum(hba1c_clean$result_value < 4 | hba1c_clean$result_value > 15)
 ```
 
 ### Build the numerator and assemble the measure table
@@ -118,6 +167,13 @@ sum(is.na(encounters$clinic_id))
 
 # TODO: same join-back-to-clinic-month logic as class
 # First, identify unique patient visits in a month.
+
+patient_clinic_month <- encounters %>%
+  filter(clinic_id %in% c("Clinic B", "Clinic D")) %>%
+  mutate(month = floor_date(encounter_date, "month")) %>%
+  distinct(clinic_id, month, patient_id)
+
+head(patient_clinic_month)
 ```
 
 ```{r}
@@ -127,13 +183,23 @@ sum(is.na(encounters$clinic_id))
 # Identify unique patients per month per clinic
 # Count how many patients per month had controlled lab values. This is the numerator.
 # 
+numer <- hba1c_clean %>%
+  filter(result_value < 8) %>%
+  inner_join(patient_clinic_month, by = c("patient_id", "month")) %>%
+  distinct(clinic_id, month, patient_id) %>%
+  count(clinic_id, month, name = "numerator")
 
+head(numer)
 ```
 
 ```{r}
 #| label: numerator-assembly
 # Join numerator and denominator together
+measure <- denom %>%
+  left_join(numer, by = c("clinic_id", "month")) %>%
+  mutate(numerator = coalesce(numerator, 0L))
 
+head(measure)
 
 ```
 
@@ -144,26 +210,45 @@ sum(is.na(encounters$clinic_id))
 #| label: chart-b
 
 # TODO: qic() with chart = "p" for Clinic B. Store the result.
+
+q_b <- qic(
+  x = month, y = numerator, n = denominator,
+  data = measure %>% filter(clinic_id == "Clinic B") %>% arrange(month),
+  chart = "p", title = "Clinic B"
+)
+q_b
+
+any(q_b$data$runs.signal, na.rm = TRUE)
 ```
 
 *Clinic B interpretation:*
 
-> [3-5 sentences: signal present? sigma or runs? plausible cause? next
+> Runs signal present. Most points are below center line from the start in 2023 to a early 2025. Then it is above the center line from early 2025 to 2026 but its still fluctuating all throughout the months. Plausible cause for the fluctuations could be a change in patient management or a significant workflow change. 
+[3-5 sentences: signal present? sigma or runs? plausible cause? next
 > step?]
 >
-> **One-line status:** [your line here]
+> **One-line status:** Clinic B - runs signal present, look into changing overall workflow process
 
 ```{r}
 #| label: chart-d
 
 # TODO: qic() with chart = "p" for Clinic D.
+q_d <- qic(
+  x = month, y = numerator, n = denominator,
+  data = measure %>% filter(clinic_id == "Clinic D") %>% arrange(month),
+  chart = "p", title = "Clinic D"
+)
+q_d
+
+any(q_d$data$runs.signal, na.rm = TRUE)
 ```
 
 *Clinic D interpretation:*
 
-> [3-5 sentences.]
+> Runs signal present. Most points are above center line from the start in 2023 to a little after 2023. Then it is below the center line until a little after 2024. From then to 2026, most points are above the center line, but it is still fluctuating throughout the months. Plausible cause for the fluctuations could be a change in patient management or a significant workflow change.
+
 >
-> **One-line status:** [your line here]
+> **One-line status:** Clinic D - runs signal present, look into changing overall workflow process
 
 ## Part 3: A simple interrupted time series (Clinic B)
 
@@ -176,6 +261,17 @@ sum(is.na(encounters$clinic_id))
 #   - post = 0/1 indicator for month >= 2025-03-01
 #   - t_post = post * (a counter that starts at 1 on the intervention
 #     month and counts up from there, 0 before it)
+sits_b <- measure %>%
+  filter(clinic_id == "Clinic B") %>%
+  arrange(month) %>%
+  mutate(
+    rate = numerator / denominator,
+    t = 1:n(),
+    post = ifelse(month >= as.Date("2025-03-01"), 1, 0),
+    t_post = ifelse(post == 1, t - which(month == as.Date("2025-03-01")) + 1, 0)
+  )
+
+head(sits_b)
 ```
 
 ```{r}
@@ -183,6 +279,9 @@ sum(is.na(encounters$clinic_id))
 
 # TODO: fit lm(rate ~ t + post, data = ...) and look at
 # summary(). Extract/interpret the post and t_post coefficients.
+sits_model <- lm(rate ~ t + post + t_post, data = sits_b)
+
+summary(sits_model)
 ```
 
 *Interpretation:*
@@ -192,3 +291,4 @@ sum(is.na(encounters$clinic_id))
 > the control chart's signal already told you? Explain, in your own
 > words, what each method is actually testing and why they might (or
 > might not) agree.]
+The post coefficient is 0.163 and is significant because p = 0.004. This means that the HbA1c control rate increased after March 2025. The t_post coefficient is 0.001 and is not significant because p = 0.922. This means that there was no significant change in the slope. This matches the control chart because the p chart showed a shift from mostly below the center line to mostly above it after 2025.
